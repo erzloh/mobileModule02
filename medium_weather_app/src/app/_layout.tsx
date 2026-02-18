@@ -11,7 +11,7 @@ import {
   View,
 } from "react-native";
 import * as Location from "expo-location";
-import { SearchProvider } from "@/context/SearchContext";
+import { SearchProvider, type SelectedLocation } from "@/context/SearchContext";
 
 const GEO_BUTTON_SIZE = 36;
 const SEARCH_TO_BUTTON_GAP = 12;
@@ -27,6 +27,8 @@ type OpenMeteoGeocodingResult = {
   name: string;
   admin1?: string;
   country?: string;
+  latitude: number;
+  longitude: number;
 };
 
 type OpenMeteoGeocodingResponse = {
@@ -40,14 +42,24 @@ function formatSuggestionLabel(result: OpenMeteoGeocodingResult) {
   return parts.join(", ");
 }
 
+function formatLocationLabel(location: SelectedLocation) {
+  return `${location.city}, ${location.region}, ${location.country}`;
+}
+
 function TopBar({
   searchText,
   setSearchText,
+  setSelectedLocation,
+  setLocationMessage,
   onGeoPress,
+  isGeoLoading,
 }: {
   searchText: string;
   setSearchText: (value: string) => void;
+  setSelectedLocation: (value: SelectedLocation | null) => void;
+  setLocationMessage: (value: string | null) => void;
   onGeoPress: () => void;
+  isGeoLoading: boolean;
 }) {
   const [isSuggestionsVisible, setIsSuggestionsVisible] = useState(false);
   const [suggestions, setSuggestions] = useState<OpenMeteoGeocodingResult[]>([]);
@@ -106,8 +118,18 @@ function TopBar({
   }, [searchText]);
 
   const selectSuggestion = (result: OpenMeteoGeocodingResult) => {
-    setSearchText(formatSuggestionLabel(result));
+    const location: SelectedLocation = {
+      city: result.name,
+      region: result.admin1 ?? "Unknown region",
+      country: result.country ?? "Unknown country",
+      latitude: result.latitude,
+      longitude: result.longitude,
+    };
+    setSelectedLocation(location);
+    setLocationMessage(null);
+    setSearchText("");
     setIsSuggestionsVisible(false);
+		Keyboard.dismiss();
   };
 
   return (
@@ -149,8 +171,12 @@ function TopBar({
             </View>
           ) : null}
         </View>
-        <Pressable style={styles.geoButton} onPress={onGeoPress}>
-          <MaterialCommunityIcons name="crosshairs-gps" size={20} color="#0f172a" />
+        <Pressable style={styles.geoButton} onPress={onGeoPress} disabled={isGeoLoading}>
+          {isGeoLoading ? (
+            <ActivityIndicator size="small" color="#0f172a" />
+          ) : (
+            <MaterialCommunityIcons name="crosshairs-gps" size={20} color="#0f172a" />
+          )}
         </Pressable>
       </View>
   );
@@ -158,11 +184,18 @@ function TopBar({
 
 export default function RootLayout() {
   const [searchText, setSearchText] = useState("");
+  const [selectedLocation, setSelectedLocation] = useState<SelectedLocation | null>(null);
+  const [locationMessage, setLocationMessage] = useState<string | null>(null);
+  const [isGeoLoading, setIsGeoLoading] = useState(false);
+
   const recordCurrentPosition = async () => {
+    setIsGeoLoading(true);
     const { status } = await Location.requestForegroundPermissionsAsync();
 
     if (status !== "granted") {
-      setSearchText("Location permission denied");
+      setSelectedLocation(null);
+      setLocationMessage("Location permission denied. Please allow location access.");
+      setIsGeoLoading(false);
       return;
     }
 
@@ -170,11 +203,26 @@ export default function RootLayout() {
       const position = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.High,
       });
-      setSearchText(
-        `${position.coords.latitude.toFixed(4)}, ${position.coords.longitude.toFixed(4)}`,
-      );
+      const [reverseResult] = await Location.reverseGeocodeAsync({
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+      });
+      const location: SelectedLocation = {
+        city: reverseResult?.city ?? "Current location",
+        region: reverseResult?.region ?? "Unknown region",
+        country: reverseResult?.country ?? "Unknown country",
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+      };
+
+      setSelectedLocation(location);
+      setLocationMessage(null);
+			setSearchText("");
     } catch {
-      setSearchText("Location unavailable");
+      setSelectedLocation(null);
+      setLocationMessage("Unable to get your location.");
+    } finally {
+      setIsGeoLoading(false);
     }
   };
 
@@ -183,7 +231,16 @@ export default function RootLayout() {
   }, []);
 
   return (
-    <SearchProvider value={{ searchText, setSearchText }}>
+    <SearchProvider
+      value={{
+        searchText,
+        setSearchText,
+        selectedLocation,
+        setSelectedLocation,
+        locationMessage,
+        setLocationMessage,
+      }}
+    >
       <Stack>
         <Stack.Screen
           name="(tabs)"
@@ -193,7 +250,10 @@ export default function RootLayout() {
                 <TopBar
                   searchText={searchText}
                   setSearchText={setSearchText}
+                  setSelectedLocation={setSelectedLocation}
+                  setLocationMessage={setLocationMessage}
                   onGeoPress={recordCurrentPosition}
+                  isGeoLoading={isGeoLoading}
                 />
               </View>
             ),
